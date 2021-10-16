@@ -11,6 +11,8 @@
 # limitations under the License.
 
 import tensorflow as tf
+import tensorflow_addons as tfa
+import tensorflow_datasets as tfds
 
 tf.__version__
 
@@ -25,39 +27,98 @@ import time
 
 from IPython import display
 
-(train_images, train_labels), (_, _) = tf.keras.datasets.mnist.load_data()
-
-train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
-train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
-
 BUFFER_SIZE = 60000
-BATCH_SIZE = 256
+BATCH_SIZE = 8
+IMAGE_SIZE = (7, 7)
+NUMBER_OF_TILE_TYPES = 6
+DATASET_PATH = "progen_images/numpy_images.npy"
 
 # Batch and shuffle the data
-train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+#train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+#train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
+#    directory=DATASET_PATH, color_mode='grayscale', batch_size=BATCH_SIZE, image_size=(IMAGE_SIZE), label_mode=None, interpolation='nearest'
+#)
+
+def load_dataset_as_one_hot(path):
+    images = np.load(path)
+
+    one_hot_shape = list(images.shape)
+    one_hot_shape[-1] = NUMBER_OF_TILE_TYPES
+    one_hot_images = np.zeros(shape=one_hot_shape)
+
+    for i in range(images.shape[0]):
+      for j in range(images.shape[1]):
+        for k in range(images.shape[2]):
+          index = images[i, j, k, 0]
+          one_hot_images[i, j, k, index] = 1
+
+    # needed because dataset_from_slices reduce first dim
+    return np.expand_dims(one_hot_images, 1).astype(np.float32)
+
+
+numpy_dataset = load_dataset_as_one_hot(DATASET_PATH)
+
+data_tensor = tf.convert_to_tensor(numpy_dataset, dtype=tf.float32)
+print(data_tensor)
+dataset = tf.data.Dataset.from_tensor_slices(data_tensor)
+#dataset = tf.data.Dataset(data_tensor)
+
+#print(dataset)
+
 
 def make_generator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(7*7*256, use_bias=False, input_shape=(100,)))
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
+    model.add(layers.Dense(5*5*16, use_bias=False, input_shape=(100,)))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Reshape((7, 7, 256)))
-    assert model.output_shape == (None, 7, 7, 256)  # Note: None is the batch size
+    model.add(layers.Reshape((5, 5, 16)))
+    assert model.output_shape == (None, 5, 5, 16)
 
-    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding='same', use_bias=False))
-    assert model.output_shape == (None, 7, 7, 128)
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
+    model.add(layers.Conv2D(64, (3, 3), padding='same'))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 14, 14, 64)
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
+    model.add(layers.Conv2DTranspose(32, (3, 3)))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2), padding='same', use_bias=False, activation='tanh'))
-    assert model.output_shape == (None, 28, 28, 1)
+    model.add(layers.Conv2D(32, (5, 5), padding='same'))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
 
+    model.add(layers.Conv2D(NUMBER_OF_TILE_TYPES, (3, 3), padding='same'))
+    model.add(layers.Softmax())
+
+    assert model.output_shape == (None, 7, 7, NUMBER_OF_TILE_TYPES)
+
+    return model
+
+def make_discriminator_model():
+    model = tf.keras.Sequential()
+    model.add(layers.Conv2D(NUMBER_OF_TILE_TYPES, (3, 3), padding='same', input_shape=[7, 7, NUMBER_OF_TILE_TYPES]))
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Conv2D(32, (5, 5), padding='same'))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Conv2D(64, (3, 3)))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Conv2D(64, (5, 5)))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Flatten())
+
+    model.add(layers.Dense(64))
+    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Dense(1)
+    )
     return model
 
 generator = make_generator_model()
@@ -65,25 +126,10 @@ generator = make_generator_model()
 noise = tf.random.normal([1, 100])
 generated_image = generator(noise, training=False)
 
-plt.imshow(generated_image[0, :, :, 0], cmap='gray')
-
-def make_discriminator_model():
-    model = tf.keras.Sequential()
-    model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same',
-                                     input_shape=[28, 28, 1]))
-    model.add(layers.LeakyReLU())
-    model.add(layers.Dropout(0.3))
-
-    model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
-    model.add(layers.LeakyReLU())
-    model.add(layers.Dropout(0.3))
-
-    model.add(layers.Flatten())
-    model.add(layers.Dense(1))
-
-    return model
-
 discriminator = make_discriminator_model()
+
+np_output = generated_image.numpy() 
+
 decision = discriminator(generated_image)
 print (decision)
 
@@ -113,10 +159,6 @@ EPOCHS = 30
 noise_dim = 100
 num_examples_to_generate = 4
 
-# You will reuse this seed overtime (so it's easier)
-# to visualize progress in the animated GIF)
-seed = tf.random.normal([num_examples_to_generate, noise_dim])
-
 # Notice the use of `tf.function`
 # This annotation causes the function to be "compiled".
 @tf.function
@@ -145,40 +187,13 @@ def train(dataset, epochs):
     for image_batch in dataset:
       train_step(image_batch)
 
-    # Produce images for the GIF as you go
-    display.clear_output(wait=True)
-#    generate_and_save_images(generator,
-#                             epoch + 1,
-#                             seed)
-
-    # Save the model every 15 epochs
-    if (epoch + 1) % 15 == 0:
+    # Save the model every 1000 epochs and try to generate valid boards
+    if (epoch + 1) % 1000 == 0:
       checkpoint.save(file_prefix = checkpoint_prefix)
 
     print ('Time for epoch {} is {} sec'.format(epoch + 1, time.time()-start))
 
-  # Generate after the final epoch
-  display.clear_output(wait=True)
-  generate_and_save_images(generator,
-                           epochs,
-                           seed)
-
-def generate_and_save_images(model, epoch, test_input):
-  # Notice `training` is set to False.
-  # This is so all layers run in inference mode (batchnorm).
-  predictions = model(test_input, training=False)
-
-  fig = plt.figure(figsize=(4, 4))
-
-  for i in range(predictions.shape[0]):
-      plt.subplot(4, 4, i+1)
-      plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray')
-      plt.axis('off')
-
-  plt.savefig('image_at_epoch_{:04d}.png'.format(epoch))
-  plt.show()
-
-train(train_dataset, EPOCHS)
+train(dataset, EPOCHS)
 
 checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
 

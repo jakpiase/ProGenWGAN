@@ -1,0 +1,6 @@
+0 - empty
+1 - enemy
+2 - treasure
+3 - water
+4 - furniture
+5 - monument
