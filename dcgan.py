@@ -10,7 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from operator import ge
 import tensorflow as tf
+from tensorflow import keras
+from tensorflow.python.keras.backend import sigmoid
+from tensorflow.python.keras.layers.core import Activation
 import tensorflow_addons as tfa
 import tensorflow_datasets as tfds
 
@@ -25,12 +29,11 @@ import PIL
 from tensorflow.keras import layers
 import time
 
-from IPython import display
+from image_creator import valid_room
 
-BUFFER_SIZE = 60000
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 IMAGE_SIZE = (7, 7)
-NUMBER_OF_TILE_TYPES = 6
+NUMBER_OF_TILE_TYPES = 4
 DATASET_PATH = "progen_images/numpy_images.npy"
 
 # Batch and shuffle the data
@@ -38,6 +41,11 @@ DATASET_PATH = "progen_images/numpy_images.npy"
 #train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
 #    directory=DATASET_PATH, color_mode='grayscale', batch_size=BATCH_SIZE, image_size=(IMAGE_SIZE), label_mode=None, interpolation='nearest'
 #)
+
+def transform_from_one_hot(one_hot_image):
+  normal_image = np.argmax(one_hot_image, axis=-1)
+  normal_image = np.expand_dims(normal_image, -1)
+  return normal_image
 
 def load_dataset_as_one_hot(path):
     images = np.load(path)
@@ -58,37 +66,38 @@ def load_dataset_as_one_hot(path):
 
 numpy_dataset = load_dataset_as_one_hot(DATASET_PATH)
 
+a = transform_from_one_hot(numpy_dataset[0])
+
 data_tensor = tf.convert_to_tensor(numpy_dataset, dtype=tf.float32)
-print(data_tensor)
 dataset = tf.data.Dataset.from_tensor_slices(data_tensor)
-#dataset = tf.data.Dataset(data_tensor)
 
-#print(dataset)
-
+#dataset = dataset.shuffle(1000)#.batch(BATCH_SIZE)
 
 def make_generator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(5*5*16, use_bias=False, input_shape=(100,)))
-    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.Dense(1*1*16, use_bias=False, input_shape=(100,)))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Reshape((5, 5, 16)))
-    assert model.output_shape == (None, 5, 5, 16)
+    model.add(layers.Reshape((1, 1, 16)))
+    assert model.output_shape == (None, 1, 1, 16)
 
-    model.add(layers.Conv2D(64, (3, 3), padding='same'))
-    model.add(tfa.layers.InstanceNormalization())
+    #model.add(layers.Conv2D(32, (3, 3), padding='same'))
+    model.add(layers.Conv2DTranspose(32, (5, 5)))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2DTranspose(32, (3, 3)))
-    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(32, (5, 5), padding='same'))
-    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(NUMBER_OF_TILE_TYPES, (3, 3), padding='same'))
-    model.add(layers.Softmax())
+    #model.add(layers.Softmax())
+    #model.add(layers.Softmax())
 
     assert model.output_shape == (None, 7, 7, NUMBER_OF_TILE_TYPES)
 
@@ -100,53 +109,49 @@ def make_discriminator_model():
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(32, (5, 5), padding='same'))
-    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Conv2D(64, (3, 3)))
-    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.Conv2D(32, (3, 3)))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Conv2D(64, (5, 5)))
-    model.add(tfa.layers.InstanceNormalization())
+    model.add(layers.Conv2D(32, (5, 5)))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Flatten())
+#    model.add(layers.Flatten())
+#
+#    model.add(layers.Dense(32))
+#    model.add(layers.BatchNormalization())
+#    model.add(layers.LeakyReLU(alpha=0.2))
+#    model.add(layers.Dense(1))
 
-    model.add(layers.Dense(64))
-    model.add(tfa.layers.InstanceNormalization())
-    model.add(layers.LeakyReLU(alpha=0.2))
-
-    model.add(layers.Dense(1)
-    )
     return model
 
 generator = make_generator_model()
-
-noise = tf.random.normal([1, 100])
-generated_image = generator(noise, training=False)
-
 discriminator = make_discriminator_model()
 
-np_output = generated_image.numpy() 
-
-decision = discriminator(generated_image)
-print (decision)
+generator.summary()
+discriminator.summary()
 
 # This method returns a helper function to compute cross entropy loss
 cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
+counter = 0
 def discriminator_loss(real_output, fake_output):
     real_loss = cross_entropy(tf.ones_like(real_output), real_output)
     fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
+
     total_loss = real_loss + fake_loss
+
     return total_loss
 
 def generator_loss(fake_output):
     return cross_entropy(tf.ones_like(fake_output), fake_output)
 
 generator_optimizer = tf.keras.optimizers.Adam(1e-4)
-discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
+discriminator_optimizer = tf.keras.optimizers.Adam(5e-6)
 
 checkpoint_dir = './training_checkpoints'
 checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
@@ -155,64 +160,74 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                  generator=generator,
                                  discriminator=discriminator)
 
-EPOCHS = 30
+EPOCHS = 1000000
 noise_dim = 100
-num_examples_to_generate = 4
+num_examples_to_generate = 10
+
+valid = 0
 
 # Notice the use of `tf.function`
 # This annotation causes the function to be "compiled".
 @tf.function
-def train_step(images):
+def train_step(images, update_discriminator):
     noise = tf.random.normal([BATCH_SIZE, noise_dim])
-
+  
     with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
       generated_images = generator(noise, training=True)
 
       real_output = discriminator(images, training=True)
       fake_output = discriminator(generated_images, training=True)
 
+      #numpy_output = generated_images.numpy()
+      #print("Average generation value: ", np.average(numpy_output))
+
       gen_loss = generator_loss(fake_output)
       disc_loss = discriminator_loss(real_output, fake_output)
 
     gradients_of_generator = gen_tape.gradient(gen_loss, generator.trainable_variables)
-    gradients_of_discriminator = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
-
     generator_optimizer.apply_gradients(zip(gradients_of_generator, generator.trainable_variables))
-    discriminator_optimizer.apply_gradients(zip(gradients_of_discriminator, discriminator.trainable_variables))
+
+    if update_discriminator:
+      gradients_of_discriminator = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
+      discriminator_optimizer.apply_gradients(zip(gradients_of_discriminator, discriminator.trainable_variables))
+
+    return (gen_loss, disc_loss)
+
+def generate_boards():
+  for _ in range (num_examples_to_generate):
+    generation_noise = np.random.rand(1, noise_dim).astype(np.float32)
+    generation_noise = tf.convert_to_tensor(generation_noise, tf.float32)
+    output = generator(generation_noise)
+
+    #print(generation_noise)
+
+    numpy_output = output.numpy()
+
+    #print("Average generation value: ", np.average(numpy_output))
+
+    global valid
+
+    for i in range(numpy_output.shape[0]):
+      room = np.expand_dims(numpy_output[0], 0)
+      room = transform_from_one_hot(room)
+      #print(transform_from_one_hot(numpy_output[0]))
+      if(valid_room(room)):
+        np.save("generated_images/validroom" + str(valid), room)
+        valid += 1
+
+DISCRIMINATOR_UPDATE_EPOCHS = 8
 
 def train(dataset, epochs):
   for epoch in range(epochs):
     start = time.time()
 
     for image_batch in dataset:
-      train_step(image_batch)
+      gen_loss, desc_loss = train_step(image_batch, epoch % DISCRIMINATOR_UPDATE_EPOCHS == 0)
 
     # Save the model every 1000 epochs and try to generate valid boards
-    if (epoch + 1) % 1000 == 0:
+    if (epoch + 1) % 200 == 0:
       checkpoint.save(file_prefix = checkpoint_prefix)
-
-    print ('Time for epoch {} is {} sec'.format(epoch + 1, time.time()-start))
+      generate_boards()
+      print ("gen_loss:", gen_loss.numpy(), "desc_loss", desc_loss.numpy(), 'Epoch {} is {} sec'.format(epoch + 1, time.time()-start))
 
 train(dataset, EPOCHS)
-
-checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
-
-# Display a single image using the epoch number
-#def display_image(epoch_no):
-#  return PIL.Image.open('image_at_epoch_{:04d}.png'.format(epoch_no))
-#
-#display_image(EPOCHS)
-#
-#anim_file = 'dcgan.gif'
-#
-#with imageio.get_writer(anim_file, mode='I') as writer:
-#  filenames = glob.glob('image*.png')
-#  filenames = sorted(filenames)
-#  for filename in filenames:
-#    image = imageio.imread(filename)
-#    writer.append_data(image)
-#  image = imageio.imread(filename)
-#  writer.append_data(image)
-
-#import tensorflow_docs.vis.embed as embed
-#embed.embed_file(anim_file)
