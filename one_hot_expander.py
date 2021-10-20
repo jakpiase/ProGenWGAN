@@ -1,15 +1,25 @@
 import numpy as np
 
-def one_hot_expand(numpy_image, tile_types, filepath):
-    #assuming H W C?
-    #one_hot_image = np.zeros(shape=(numpy_image.shape) + (tile_types,), dtype=np.uint8)
-    #one_hot_image
-    #print(one_hot_image.shape)
+from board_operations import *
 
-    res = (np.arange(numpy_image.max()+1) == numpy_image[...,None]).astype(np.uint8)
-    print(res)
+a = np.load("all_datasets/numpy_images.npy")
+
+a = convert_to_4D_list(a)
+
+normal_images = 120
+
+for i in range(144):
+    print(np.array_equal(a[120 + i], a[normal_images + 144 + i]))
 
 
-arr = np.zeros((4, 5)).astype(np.uint8)
+new_list = []
 
-one_hot_expand(arr, 6, "aa")
+for i in range(120 + 144):
+    new_list.append(a[i])
+
+#print(len(get_unique(new_list)))
+
+b = batched_dataset_from_list(new_list)
+
+
+#np.save("all_datasets/numpy_images.npy", b)
