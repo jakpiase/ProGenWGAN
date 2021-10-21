@@ -33,7 +33,7 @@ from board_operations import *
 
 from image_creator import valid_room
 
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 IMAGE_SIZE = (7, 7)
 NUMBER_OF_TILE_TYPES = 7
 DATASET_PATH = "all_datasets/numpy_images.npy"
@@ -84,21 +84,31 @@ def make_generator_model():
 def make_discriminator_model():
     model = tf.keras.Sequential()
     model.add(layers.Conv2D(NUMBER_OF_TILE_TYPES, (3, 3), padding='same', input_shape=[7, 7, NUMBER_OF_TILE_TYPES]))
+    model.add(layers.LayerNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(32, (3, 3), padding='same'))
-    model.add(layers.BatchNormalization())
+    model.add(layers.LayerNormalization())
+    #model.add(layers.BatchNormalization()) # SWITCHED TO LAYERNORM SINCE WGAN DOES NOT ACCEPT BATCHNORM
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(64, (3, 3)))
-    model.add(layers.BatchNormalization())
+    model.add(layers.LayerNormalization())
+    #model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(64, (3, 3), padding='same'))
-    model.add(layers.BatchNormalization())
+    model.add(layers.LayerNormalization())
+    #model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(64, (5, 5)))
+    model.add(layers.LayerNormalization())
+    #model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Dense(1))
+    #model.add(layers.Activation(activation="sigmoid"))   
     #model.add(layers.Activation(activation="sigmoid"))   
     #model.add(layers.LeakyReLU(alpha=0.2))
 
@@ -122,18 +132,15 @@ cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
 counter = 0
 def discriminator_loss(real_output, fake_output):
-    real_loss = cross_entropy(tf.ones_like(real_output), real_output)
-    fake_loss = cross_entropy(tf.zeros_like(fake_output), fake_output)
-
-    total_loss = real_loss + fake_loss
-
-    return total_loss
+    real_loss = tf.reduce_mean(real_output)
+    fake_loss = tf.reduce_mean(fake_output)
+    return fake_loss - real_loss
 
 def generator_loss(fake_output):
-    return cross_entropy(tf.ones_like(fake_output), fake_output)
+    return -tf.reduce_mean(fake_output)
 
-generator_optimizer = tf.keras.optimizers.Adam(2e-6)
-discriminator_optimizer = tf.keras.optimizers.Adam(1e-6)
+generator_optimizer = tf.keras.optimizers.Adam(learning_rate=1e-5, beta_1=0.5, beta_2=0.9)
+discriminator_optimizer = tf.keras.optimizers.Adam(learning_rate=1e-5, beta_1=0.5, beta_2=0.9)
 
 checkpoint_dir = './training_checkpoints'
 checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
@@ -144,36 +151,66 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
 
 EPOCHS = 10000
 noise_dim = 100
-num_examples_to_generate = 100
+num_examples_to_generate = 1000
 
 valid = 0
 
 random_generator = tf.random.Generator.from_non_deterministic_state()
 
+def gradient_penalty(batch_size, real_images, fake_images):
+    alpha = tf.random.normal([batch_size, 1, 1, 1], 0.0, 1.0)
+    diff = fake_images - real_images
+
+    interpolated = real_images + alpha * diff
+
+    with tf.GradientTape() as gp_tape:
+        gp_tape.watch(interpolated)
+
+        pred = discriminator(interpolated, training=True)
+
+    grads = gp_tape.gradient(pred, [interpolated])[0]
+    norm = tf.sqrt(tf.reduce_sum(tf.square(grads), axis=[1, 2, 3]))
+    gp = tf.reduce_mean((norm - 1.0) ** 2)
+
+    return gp
+
+GP_WEIGHT = 10.0
+D_STEPS = 5
+
 # Notice the use of `tf.function`
 # This annotation causes the function to be "compiled".
 @tf.function
-def train_step(images, update_discriminator):
+def train_step(real_images):
+
+    for i in range(D_STEPS):
+        noise = random_generator.normal([BATCH_SIZE, noise_dim])
+        with tf.GradientTape() as tape:
+            fake_images = generator(noise, training=True)
+            # Get the logits for the fake images
+            fake_logits = discriminator(fake_images, training=True)
+            # Get the logits for the real images
+            real_logits = discriminator(real_images, training=True)
+
+            disc_cost = discriminator_loss(real_logits, fake_logits)
+
+            gp = gradient_penalty(BATCH_SIZE, real_images, fake_images)
+
+            disc_loss = disc_cost + gp * GP_WEIGHT
+
+        disc_gradient = tape.gradient(disc_loss, discriminator.trainable_variables)
+        discriminator_optimizer.apply_gradients(zip(disc_gradient, discriminator.trainable_variables))
+
     noise = random_generator.normal([BATCH_SIZE, noise_dim])
-  
-    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
-      generated_images = generator(noise, training=True)
+    with tf.GradientTape() as tape:
+        # Generate fake images using the generator
+        generated_images = generator(noise, training=True)
+        # Get the discriminator logits for fake images
+        gen_img_logits = discriminator(generated_images, training=True)
+        # Calculate the generator loss
+        gen_loss = generator_loss(gen_img_logits)
 
-      real_output = discriminator(images, training=True)
-      fake_output = discriminator(generated_images, training=True)
-
-      #numpy_output = generated_images.numpy()
-      #print("Average generation value: ", np.average(numpy_output))
-
-      gen_loss = generator_loss(fake_output)
-      disc_loss = discriminator_loss(real_output, fake_output)
-
-    if update_discriminator:
-      gradients_of_generator = gen_tape.gradient(gen_loss, generator.trainable_variables)
-      generator_optimizer.apply_gradients(zip(gradients_of_generator, generator.trainable_variables))
-
-    gradients_of_discriminator = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
-    discriminator_optimizer.apply_gradients(zip(gradients_of_discriminator, discriminator.trainable_variables))
+    gen_gradient = tape.gradient(gen_loss, generator.trainable_variables)
+    generator_optimizer.apply_gradients(zip(gen_gradient, generator.trainable_variables))
 
     return (gen_loss, disc_loss)
 
@@ -188,47 +225,43 @@ numpy_base_dataset = np.load(DATASET_PATH)
 #print(numpy_base_dataset.shape)
 
 def generate_boards():
-  generation_noise = random_generator.normal([num_examples_to_generate, noise_dim])
-  output = generator(generation_noise)
+    generation_noise = random_generator.normal([num_examples_to_generate, noise_dim])
+    output = generator(generation_noise)
 
-  numpy_output = output.numpy()
+    decision = discriminator(output)
+    deicsion = decision.numpy()
 
-    #print("Average generation value: ", np.average(numpy_output))
+    numpy_output = output.numpy()
 
-  global valid
+    global valid
 
-  room_list = []
-  valid_rooms = 0
+    room_list = []
+    valid_rooms = 0
 
-  for i in range(numpy_output.shape[0]):
-    room = np.expand_dims(numpy_output[i], 0)
-    room = transform_from_one_hot(room)
-    room_list.append(room)
-    if valid_room(room):
-      valid_rooms += 1
-      if in_dataset(numpy_base_dataset, room) == False:
-        np.save("generated_images/valid_unique_room" + str(valid), room)
-        valid += 1
+    for i in range(numpy_output.shape[0]):
+        room = np.expand_dims(numpy_output[i], 0)
+        room = transform_from_one_hot(room)
+        room_list.append(room)
+        if valid_room(room):
+            valid_rooms += 1
+            if in_dataset(numpy_base_dataset, room) == False:
+                np.save("generated_images/valid_unique_room" + str(valid), room)
+                valid += 1
 
-  return str(f"{len(get_unique(room_list)) / float(num_examples_to_generate):.0%}") + " valid rooms generated:" + str(valid_rooms) + " "
-
-DISCRIMINATOR_UPDATE_EPOCHS = 1
+    return str(f"{len(get_unique(room_list)) / float(num_examples_to_generate):.0%}") + " valid rooms generated:" + str(valid_rooms) + " avg desc score:" + str(np.mean(decision)) 
 
 def train(dataset, epochs):
-  start = time.time()
-  for epoch in range(epochs):
+    start = time.time()
+    for epoch in range(epochs):
 
-    for image_batch in dataset:
-      gen_loss, desc_loss = train_step(image_batch, epoch % DISCRIMINATOR_UPDATE_EPOCHS == 0)
+        for image_batch in dataset:
+            gen_loss, desc_loss = train_step(image_batch)
 
-    # Save the model every X epochs and try to generate valid boards
-    #if (epoch + 1) % 1:
-    #  generate_boards()
-    if (epoch + 1) % 1 == 0:
-      print ("gen_loss:", gen_loss.numpy(), "desc_loss", desc_loss.numpy(), "unique rooms generated:", generate_boards(), 'Epoch {} took {} sec'.format(epoch + 1, time.time()-start))
-      #generate_boards()
-      checkpoint.save(file_prefix = checkpoint_prefix)
-      start = time.time()
+        if (epoch + 1) % 5 == 0:
+            print ("gen_loss:", gen_loss.numpy(), "desc_loss", desc_loss.numpy(), "unique rooms generated:", generate_boards(), 'Epoch {} took {} sec'.format(epoch + 1, time.time()-start))
+            #generate_boards()
+            checkpoint.save(file_prefix = checkpoint_prefix)
+            start = time.time()
 
 numpy_dataset = load_dataset_as_one_hot(DATASET_PATH)
 

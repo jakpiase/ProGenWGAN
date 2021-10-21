@@ -4,6 +4,7 @@ import os
 from board_operations import *
 
 GENERATED_FILES_PATH = "generated_images"
+BASE_DATASET_PATH = "all_datasets/numpy_images.npy"
 DATA_IMAGE_SIZE = (1, 7, 7, 1)
 
 files = os.listdir(GENERATED_FILES_PATH)
@@ -26,7 +27,32 @@ for i in range(NUM_FILES):
         unique_arrays.append(all_arrays[i])
 
 
+new_unique_arrays = []
+base_dataset = np.load(BASE_DATASET_PATH)
+
 for arr in unique_arrays:
+    is_unique = True
+    for i in range(base_dataset.shape[0]):
+        if arrays_similar(arr, base_dataset[i]):
+            is_unique = False
+
+    if is_unique:
+        new_unique_arrays.append(arr)
+
+occurances = [0] * 7
+for arr in new_unique_arrays:
+    for i in range(7):
+        if (arr == i).sum() > 0:
+            occurances[i] += 1
+
+
+
+for arr in new_unique_arrays:
     print(np.reshape(arr, (7, 7)))
 
 print("Found", len(unique_arrays), "unique boards in generated images")
+print("Found", len(new_unique_arrays), "unique boards in generated images")
+
+
+for i in range(7):
+    print("i =", i ,"occ[i]=", occurances[i])
