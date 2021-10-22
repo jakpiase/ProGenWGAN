@@ -151,7 +151,7 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
 
 EPOCHS = 10000
 noise_dim = 100
-num_examples_to_generate = 1000
+num_examples_to_generate = 100
 
 valid = 0
 
@@ -257,7 +257,7 @@ def train(dataset, epochs):
         for image_batch in dataset:
             gen_loss, desc_loss = train_step(image_batch)
 
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 10 == 0:
             print ("gen_loss:", gen_loss.numpy(), "desc_loss", desc_loss.numpy(), "unique rooms generated:", generate_boards(), 'Epoch {} took {} sec'.format(epoch + 1, time.time()-start))
             #generate_boards()
             checkpoint.save(file_prefix = checkpoint_prefix)
