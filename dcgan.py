@@ -14,7 +14,7 @@ from operator import ge
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.python.keras.backend import sigmoid
-from tensorflow.python.keras.layers.core import Activation
+from tensorflow.python.keras.layers.core import Activation, Flatten
 import tensorflow_addons as tfa
 import tensorflow_datasets as tfds
 
@@ -74,6 +74,8 @@ def make_generator_model():
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(NUMBER_OF_TILE_TYPES, (3, 3), padding='same'))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
     model.add(layers.Softmax())
     #model.add(layers.Softmax())
 
@@ -102,10 +104,16 @@ def make_discriminator_model():
     #model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Conv2D(64, (5, 5)))
+    ### ADDITIONAL LAYER ADDED AT 24.10.2021 02:16, SO CONSIDER DELETING    WATCH ME
+    model.add(layers.Conv2D(64, (3, 3), padding='same'))
     model.add(layers.LayerNormalization())
     #model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
+    ### ADDITIONAL LAYER END                                                WATCH ME
+
+    model.add(layers.Conv2D(64, (5, 5)))
+    model.add(layers.LeakyReLU(alpha=0.2))
+    model.add(layers.Flatten())
 
     model.add(layers.Dense(1))
     #model.add(layers.Activation(activation="sigmoid"))   
@@ -175,7 +183,7 @@ def gradient_penalty(batch_size, real_images, fake_images):
     return gp
 
 GP_WEIGHT = 10.0
-D_STEPS = 5
+D_STEPS = 10
 
 # Notice the use of `tf.function`
 # This annotation causes the function to be "compiled".
@@ -256,6 +264,7 @@ def train(dataset, epochs):
 
         for image_batch in dataset:
             gen_loss, desc_loss = train_step(image_batch)
+
 
         if (epoch + 1) % 10 == 0:
             print ("gen_loss:", gen_loss.numpy(), "desc_loss", desc_loss.numpy(), "unique rooms generated:", generate_boards(), 'Epoch {} took {} sec'.format(epoch + 1, time.time()-start))
