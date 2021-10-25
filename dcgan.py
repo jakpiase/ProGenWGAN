@@ -15,13 +15,10 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.python.keras.backend import sigmoid
 from tensorflow.python.keras.layers.core import Activation, Flatten
-import tensorflow_addons as tfa
-import tensorflow_datasets as tfds
 
 tf.__version__
 
 import glob
-import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -57,15 +54,19 @@ def make_generator_model():
     model.add(layers.Reshape((1, 1, 16)))
     assert model.output_shape == (None, 1, 1, 16)
 
-    model.add(layers.Conv2DTranspose(64, (5, 5)))
+    model.add(layers.Conv2DTranspose(128, (5, 5)))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Conv2D(128, (3, 3), padding='same'))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Conv2DTranspose(64, (3, 3)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
     model.add(layers.Conv2D(64, (3, 3), padding='same'))
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU(alpha=0.2))
-
-    model.add(layers.Conv2DTranspose(32, (3, 3)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
@@ -103,13 +104,6 @@ def make_discriminator_model():
     model.add(layers.LayerNormalization())
     #model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
-
-    ### ADDITIONAL LAYER ADDED AT 24.10.2021 02:16, SO CONSIDER DELETING    WATCH ME
-    model.add(layers.Conv2D(64, (3, 3), padding='same'))
-    model.add(layers.LayerNormalization())
-    #model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU(alpha=0.2))
-    ### ADDITIONAL LAYER END                                                WATCH ME
 
     model.add(layers.Conv2D(64, (5, 5)))
     model.add(layers.LeakyReLU(alpha=0.2))
@@ -157,7 +151,7 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                  generator=generator,
                                  discriminator=discriminator)
 
-EPOCHS = 10000
+EPOCHS = 100000
 noise_dim = 100
 num_examples_to_generate = 100
 
@@ -183,7 +177,7 @@ def gradient_penalty(batch_size, real_images, fake_images):
     return gp
 
 GP_WEIGHT = 10.0
-D_STEPS = 10
+D_STEPS = 5
 
 # Notice the use of `tf.function`
 # This annotation causes the function to be "compiled".
