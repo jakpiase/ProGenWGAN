@@ -47,12 +47,12 @@ DATASET_PATH = "all_datasets/numpy_images.npy"
 
 def make_generator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(1*1*16, use_bias=False, input_shape=(100,)))
+    model.add(layers.Dense(1*1*128, use_bias=False, input_shape=(100,)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Reshape((1, 1, 16)))
-    assert model.output_shape == (None, 1, 1, 16)
+    model.add(layers.Reshape((1, 1, 128)))
+    assert model.output_shape == (None, 1, 1, 128)
 
     model.add(layers.Conv2DTranspose(128, (5, 5)))
     model.add(layers.BatchNormalization())
@@ -95,17 +95,27 @@ def make_discriminator_model():
     #model.add(layers.BatchNormalization()) # SWITCHED TO LAYERNORM SINCE WGAN DOES NOT ACCEPT BATCHNORM
     model.add(layers.LeakyReLU(alpha=0.2))
 
+    model.add(layers.Conv2D(32, (3, 3), padding='same'))
+    model.add(layers.LayerNormalization())
+    #model.add(layers.BatchNormalization()) # SWITCHED TO LAYERNORM SINCE WGAN DOES NOT ACCEPT BATCHNORM
+    model.add(layers.LeakyReLU(alpha=0.2))
+
+    model.add(layers.Conv2D(64, (3, 3), padding='same'))
+    model.add(layers.LayerNormalization())
+    #model.add(layers.BatchNormalization()) # SWITCHED TO LAYERNORM SINCE WGAN DOES NOT ACCEPT BATCHNORM
+    model.add(layers.LeakyReLU(alpha=0.2))
+
     model.add(layers.Conv2D(64, (3, 3)))
     model.add(layers.LayerNormalization())
     #model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Conv2D(64, (3, 3), padding='same'))
+    model.add(layers.Conv2D(128, (3, 3), padding='same'))
     model.add(layers.LayerNormalization())
     #model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU(alpha=0.2))
 
-    model.add(layers.Conv2D(64, (5, 5)))
+    model.add(layers.Conv2D(128, (5, 5)))
     model.add(layers.LeakyReLU(alpha=0.2))
     model.add(layers.Flatten())
 
@@ -177,30 +187,36 @@ def gradient_penalty(batch_size, real_images, fake_images):
     return gp
 
 GP_WEIGHT = 10.0
-D_STEPS = 5
+D_STEPS = 8
 
 # Notice the use of `tf.function`
 # This annotation causes the function to be "compiled".
 @tf.function
-def train_step(real_images):
+def train_step_disc(real_images):
 
-    for i in range(D_STEPS):
-        noise = random_generator.normal([BATCH_SIZE, noise_dim])
-        with tf.GradientTape() as tape:
-            fake_images = generator(noise, training=True)
-            # Get the logits for the fake images
-            fake_logits = discriminator(fake_images, training=True)
-            # Get the logits for the real images
-            real_logits = discriminator(real_images, training=True)
+    noise = random_generator.normal([BATCH_SIZE, noise_dim])
+    with tf.GradientTape() as tape:
+        fake_images = generator(noise, training=True)
+        # Get the logits for the fake images
+        fake_logits = discriminator(fake_images, training=True)
+        # Get the logits for the real images
+        real_logits = discriminator(real_images, training=True)
 
-            disc_cost = discriminator_loss(real_logits, fake_logits)
+        disc_cost = discriminator_loss(real_logits, fake_logits)
 
-            gp = gradient_penalty(BATCH_SIZE, real_images, fake_images)
+        gp = gradient_penalty(BATCH_SIZE, real_images, fake_images)
 
-            disc_loss = disc_cost + gp * GP_WEIGHT
+        disc_loss = disc_cost + gp * GP_WEIGHT
 
-        disc_gradient = tape.gradient(disc_loss, discriminator.trainable_variables)
-        discriminator_optimizer.apply_gradients(zip(disc_gradient, discriminator.trainable_variables))
+    disc_gradient = tape.gradient(disc_loss, discriminator.trainable_variables)
+    discriminator_optimizer.apply_gradients(zip(disc_gradient, discriminator.trainable_variables))
+
+    return disc_loss
+
+# Notice the use of `tf.function`
+# This annotation causes the function to be "compiled".
+@tf.function
+def train_step_gen():
 
     noise = random_generator.normal([BATCH_SIZE, noise_dim])
     with tf.GradientTape() as tape:
@@ -214,17 +230,10 @@ def train_step(real_images):
     gen_gradient = tape.gradient(gen_loss, generator.trainable_variables)
     generator_optimizer.apply_gradients(zip(gen_gradient, generator.trainable_variables))
 
-    return (gen_loss, disc_loss)
+    return gen_loss
 
 
 numpy_base_dataset = np.load(DATASET_PATH)
-
-#print(numpy_base_dataset)
-#print(numpy_base_dataset.shape)
-#for i in range(numpy_base_dataset.shape[0]):
-#  print(np.reshape(numpy_base_dataset[i], (7, 7)))
-#
-#print(numpy_base_dataset.shape)
 
 def generate_boards():
     generation_noise = random_generator.normal([num_examples_to_generate, noise_dim])
@@ -255,13 +264,17 @@ def generate_boards():
 def train(dataset, epochs):
     start = time.time()
     for epoch in range(epochs):
-
+        i = 0
         for image_batch in dataset:
-            gen_loss, desc_loss = train_step(image_batch)
+            disc_loss = train_step_disc(image_batch)
 
+            if i % D_STEPS == 0:
+                gen_loss = train_step_gen()
+
+            i += 1
 
         if (epoch + 1) % 10 == 0:
-            print ("gen_loss:", gen_loss.numpy(), "desc_loss", desc_loss.numpy(), "unique rooms generated:", generate_boards(), 'Epoch {} took {} sec'.format(epoch + 1, time.time()-start))
+            print ("gen_loss:", gen_loss.numpy(), "disc_loss", disc_loss.numpy(), "unique rooms generated:", generate_boards(), 'Epoch {} took {} sec'.format(epoch + 1, time.time()-start))
             #generate_boards()
             checkpoint.save(file_prefix = checkpoint_prefix)
             start = time.time()

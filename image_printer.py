@@ -39,20 +39,14 @@ for arr in unique_arrays:
     if is_unique:
         new_unique_arrays.append(arr)
 
-save_arr = []
 
 occurances = [0] * 7
-for arr in new_unique_arrays:
-    if (arr == 2).sum() > 0 or (arr == 6).sum() > 0:
-        save_arr.append(arr)
-
-
 for arr in new_unique_arrays:
     for i in range(7):
         if (arr == i).sum() > 0:
             occurances[i] += 1
 
-print(len(save_arr))
+print("Found", len(files), "images in directory")
 
 
 
